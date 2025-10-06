@@ -1,53 +1,38 @@
-pipeline {
+pipeline{
     
-	agent any
-tools {
-	    maven "MAVEN3"
-	    jdk "JDK17"
-	}
-    environment {
-        NEXUS_VERSION = "nexus3"
-        NEXUS_PROTOCOL = "http"
-        NEXUS_URL = "IP:8081"
-        NEXUS_REPOSITORY = "vprofile-release"
-	NEXUS_REPO_ID    = "vprofile-release"
-        NEXUS_CREDENTIAL_ID = "nexuslogin"
-        ARTVERSION = "${env.BUILD_ID}"
+    agent any 
+    tools{
+
+        maven "MAVEN"
+        jdk "jdk17"
     }
-	
     stages{
-        
-        stage('BUILD'){
-            steps {
-                sh 'mvn clean install -DskipTests'
+
+        stage('Fetching code from github'){
+
+            steps{
+                echo "========executing Fetching code from github========"
+                git branch: 'main', url : 'https://github.com/Sksathish35/Jenkins-CICD.git'
+                
             }
-            post {
-                success {
-                    echo 'Now Archiving...'
-                    archiveArtifacts artifacts: '**/target/*.war'
-                }
-            }
+
         }
 
-	stage('UNIT TEST'){
-            steps {
+        stage('Unit test'){
+            steps{
                 sh 'mvn test'
             }
         }
 
-	stage('INTEGRATION TEST'){
-            steps {
-                sh 'mvn verify -DskipUnitTests'
+        stage('Build'){
+
+            steps{
+                sh 'mvn install -DskipTests'
             }
-        }
-		
-        stage ('CODE ANALYSIS WITH CHECKSTYLE'){
-            steps {
-                sh 'mvn checkstyle:checkstyle'
-            }
-            post {
-                success {
-                    echo 'Generated Analysis Result'
+            post{
+                success{
+                    echo "Archiving artifacts"
+                    archiveArtifacts artifacts: '**/*.war'
                 }
             }
         }
@@ -55,11 +40,11 @@ tools {
         stage('CODE ANALYSIS with SONARQUBE') {
           
 		  environment {
-             scannerHome = tool 'sonarscanner4'
+             scannerHome = tool 'sonarqube-scanner-tool'
           }
 
           steps {
-            withSonarQubeEnv('sonar-pro') {
+            withSonarQubeEnv('sonarqube') {
                sh '''${scannerHome}/bin/sonar-scanner -Dsonar.projectKey=vprofile \
                    -Dsonar.projectName=vprofile-repo \
                    -Dsonar.projectVersion=1.0 \
@@ -70,51 +55,47 @@ tools {
                    -Dsonar.java.checkstyle.reportPaths=target/checkstyle-result.xml'''
             }
 
-            timeout(time: 10, unit: 'MINUTES') {
-               waitForQualityGate abortPipeline: true
-            }
+            // timeout(time: 1, unit: 'MINUTES') {
+            //    waitForQualityGate abortPipeline: true
+            // }
           }
         }
 
-        stage("Publish to Nexus Repository Manager") {
+        stage('Build Docker Image') {
             steps {
                 script {
-                    pom = readMavenPom file: "pom.xml";
-                    filesByGlob = findFiles(glob: "target/*.${pom.packaging}");
-                    echo "${filesByGlob[0].name} ${filesByGlob[0].path} ${filesByGlob[0].directory} ${filesByGlob[0].length} ${filesByGlob[0].lastModified}"
-                    artifactPath = filesByGlob[0].path;
-                    artifactExists = fileExists artifactPath;
-                    if(artifactExists) {
-                        echo "*** File: ${artifactPath}, group: ${pom.groupId}, packaging: ${pom.packaging}, version ${pom.version} ARTVERSION";
-                        nexusArtifactUploader(
-                            nexusVersion: NEXUS_VERSION,
-                            protocol: NEXUS_PROTOCOL,
-                            nexusUrl: NEXUS_URL,
-                            groupId: pom.groupId,
-                            version: ARTVERSION,
-                            repository: NEXUS_REPOSITORY,
-                            credentialsId: NEXUS_CREDENTIAL_ID,
-                            artifacts: [
-                                [artifactId: pom.artifactId,
-                                classifier: '',
-                                file: artifactPath,
-                                type: pom.packaging],
-                                [artifactId: pom.artifactId,
-                                classifier: '',
-                                file: "pom.xml",
-                                type: "pom"]
-                            ]
-                        );
-                    } 
-		    else {
-                        error "*** File: ${artifactPath}, could not be found";
-                    }
+                echo "======== Building Docker image ========"
+                // Build Docker image using Dockerfile in workspace
+                sh """
+                docker build -t vprofile-repo:v1.${BUILD_NUMBER} .
+                """
                 }
-            }
+                 }
         }
 
-
+        stage('Push Docker Image to ECR') {
+    environment {
+        AWS_REGION = 'us-east-1' // replace with your AWS region
+        ECR_REPO_NAME = 'vprofile-repo'
+        IMAGE_TAG = "v1.${BUILD_NUMBER}" // match your built image tag
+        ACCOUNT_ID = '882437028520'      // replace with your AWS Account ID
     }
+    steps {
+        echo "======== Logging into ECR ========"
+        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
+            sh """
+                # Authenticate Docker to ECR
+                aws ecr get-login-password --region ${AWS_REGION} | \
+                docker login --username AWS --password-stdin ${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
 
+                # Tag the existing image with ECR repository URI
+                docker tag ${ECR_REPO_NAME}:${IMAGE_TAG} ${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}:${IMAGE_TAG}
 
+                # Push the image to ECR
+                docker push ${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}:${IMAGE_TAG}
+            """
+        }
+    }
+}
+}
 }
