@@ -78,7 +78,7 @@ pipeline{
         AWS_REGION = 'us-east-1' // replace with your AWS region
         ECR_REPO_NAME = 'vprofile-repo'
         IMAGE_TAG = "v1.${BUILD_NUMBER}" // match your built image tag
-        ACCOUNT_ID = '882437028520'      // replace with your AWS Account ID
+        ACCOUNT_ID = '1234567890'      // replace with your AWS Account ID
     }
     steps {
         echo "======== Logging into ECR ========"
